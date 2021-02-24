@@ -1,0 +1,360 @@
+---
+title: "Firearm Discounting Methods"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE, cache=TRUE}
+knitr::opts_chunk$set(echo = FALSE, 
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.path='figures/')
+```
+
+# Methodology
+
+## Rationale
+
+The primary goal here is to concurrently evaluate how delay discounting phenomena (i.e., temporally-extended events) can interact with more traditional metrics representing outcomes (i.e., efficacy). 
+
+In this demonstration, two factors of interest are evaluated with respect to individual decision-making. The first factor speaks to how the magnitude between immediate/delayed prospects factor into individual choice. For example, some may be particularly sensitive to delayed prospects with greater magnitdues (irrespective of the delay). Alternatively, the second factor speaks to sensitivity to delays. For instance, some may be particularly sensitive to differences in delay and may disregard prospects with higher utility in the future.
+
+## Modeling
+
+### Logistic Modeling
+
+In contrast to titration procedures, the methods provided here apply a multi-level logistic approach. Such an approach circuments the unnecessary compression of individual variance (i.e., individual-means), avoids a two-stage analysis, and altogether improves analytical power.
+
+Specific model structure is provided below:
+
+$$
+P(Waiting) = logistic(\beta_{Magnitude} * ln(\frac{LL_{Magnitude}}{SS_{Magnitude}})+\beta_{Delay} * ln(LL_{Delay} + 1))
+$$
+
+In this model, the probability of **waiting** for the temporally-extended option is modeled as a binary option (i.e., 1 = wait, 0 = no wait). In this model, if magnitudes were equal (i.e,. 1/1) and delays were zero, both metrics would reduce to zero and predict that the probability of the respondent waiting for the delayed option would be zero (i.e., with same magnitude for each prospect, it makes no sense to wait).
+
+### Multilevel Modeling
+
+In addition to the benefits of logistic modeling noted above, this approach is easily expanded to a multi-level approach. The benefits of this approach are numerous and the reader is directed to Young (2017) for a review of the merits of this approach in delay discounting experiments.
+
+The specific model and structure used in this study is indicated below:
+
+$$
+Waited ~ Group*LogMagnitudeRatio + Group*logDelayRatio - 1 - Group + (LogMagnitudeRatio + LogDelayRatio - 1 | Subject)
+$$
+
+In this formulation, intercepts are not permitted to vary but individual sopes (i.e., simple slopes) are allowed to vary at the individual level for both Delay and Magnitude ratios.
+
+## Hypothetical Usage in Suicidology
+
+In this study, data are simulated based on two hypothetical groups. 
+
+```{r simulationCode, include=FALSE}
+
+suppressPackageStartupMessages(library(emmeans))
+suppressPackageStartupMessages(library(kableExtra))
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(lattice))
+suppressPackageStartupMessages(library(lme4))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(sjPlot))
+suppressPackageStartupMessages(library(sjlabelled))
+suppressPackageStartupMessages(library(sjmisc))
+suppressPackageStartupMessages(library(tidyverse))
+
+# --- Simulation Parameters  ---
+set.seed(65535)
+
+normVar <- 0.5
+nPopulation  <- 50
+
+priorGroupSeeds <- data.frame(b1 = c(2,  2),
+                              b2 = c(-2, -1))
+
+finalDataFrame <- NULL
+
+for (g in c(0, 1)) {
+  for (i in 1:nPopulation) {
+    indivMatrix = expand.grid(
+      LLdel = c(1, 2, 4, 8, 16),
+      SSdel = rep(0, 5),
+      LLmag = c(1, 2, 4, 8),
+      SSmag = rep(1, length(4))) %>%
+      distinct() %>%
+      mutate(
+        logDelayRatio = log((LLdel + 1)/(SSdel + 1)),
+        logMagRatio = log(LLmag/SSmag),
+        Group = g
+      )
+
+    ## Pull parameters
+    b1 = priorGroupSeeds[(g+1), "b1"]
+    b2 = priorGroupSeeds[(g+1), "b2"]
+
+    ## Set up logits
+    indivMatrix$z = b1*indivMatrix$logMagRatio + 
+      b2*indivMatrix$logDelayRatio + 
+      rnorm(nrow(indivMatrix), 0, normVar)
+
+    ## Unlogit
+    indivMatrix$prZ <- exp(indivMatrix$z) / ( 1 + exp(indivMatrix$z))
+    
+    indivMatrix$Waited <- rbinom(nrow(indivMatrix), 1, indivMatrix$prZ)
+    indivMatrix$Subject <- i + (g * nPopulation)
+    
+    if (is.null(finalDataFrame)) {
+      finalDataFrame <- indivMatrix
+    } else {
+      finalDataFrame <- rbind(
+        finalDataFrame,
+        indivMatrix
+      )
+    }
+  }
+}
+
+
+```
+
+Per this simulation, an aggregate description is provided below across groups (and delay points):
+
+```{r aggregatedValues, fig.width=9, fig.height=6, echo=FALSE, warning=FALSE}
+
+suppressPackageStartupMessages(library(gridExtra))
+suppressPackageStartupMessages(library(grid))
+suppressPackageStartupMessages(library(boot))
+
+finalDataFrame %>%
+  group_by(Group, LLdel) %>%
+  summarise(AverageProbabilityOfWaiting = mean(Waited),
+            SdProbabilityOfWaiting = sd(Waited)) %>%
+  kable() %>%
+  kable_styling()
+
+p1 <- finalDataFrame %>%
+  group_by(Group, logDelayRatio) %>%
+  summarise(AverageProbabilityOfWaiting = mean(Waited), 
+            n = n(),
+            SdProbabilityOfWaiting = sd(Waited),
+            se = SdProbabilityOfWaiting / sqrt(n)) %>%
+  as.data.frame() %>%
+  ggplot(., aes(x = logDelayRatio, y = AverageProbabilityOfWaiting, color = as.factor(Group))) +
+  geom_point() +
+  geom_errorbar(aes(ymin=AverageProbabilityOfWaiting-se, 
+                    ymax=AverageProbabilityOfWaiting+se), 
+                width=.2) +
+  ylim(0,1) +
+  ylab("Probability of Waiting") +
+  xlim(1, 3) +
+  xlab("Ratio of Delay Difference") +
+  theme_bw() +
+  scale_color_manual(name = '', 
+         values = c('0'='black','1'='red'), 
+         labels = c('Steeper Discounting Group','Shallower Discounting Group')) +
+    theme(legend.position="bottom")
+
+p2 <- finalDataFrame %>%
+  group_by(Group, logMagRatio) %>%
+  summarise(AverageProbabilityOfWaiting = mean(Waited), 
+            n = n(),
+            SdProbabilityOfWaiting = sd(Waited),
+            se = SdProbabilityOfWaiting / sqrt(n)) %>%
+  as.data.frame() %>%
+  ggplot(., aes(x = logMagRatio, y = AverageProbabilityOfWaiting, color = as.factor(Group))) +
+  geom_point() +
+  geom_errorbar(aes(ymin=AverageProbabilityOfWaiting-se, 
+                    ymax=AverageProbabilityOfWaiting+se), 
+                width=.2) +
+  ylim(0,1) +
+  ylab("Probability of Waiting") +
+  #xlim(1, 3) +
+  xlab("Ratio of Magnitudes") +
+  #scale_x_discrete(breaks = c(1, 2, 4, 8, 16),
+  #                 labels = c("1", "2", "4", "8", "16")) +
+  theme_bw() +
+  scale_color_manual(name = '', 
+         values = c('0'='black','1'='red'), 
+         labels = c('Lower Risk Group','Higher Risk Group')) +
+    theme(legend.position="bottom")
+
+grid.arrange(p1, p2, ncol = 2)
+
+```
+
+Simulated data were compared using the methods listed above. Across all individuals, weights were fitted for the logMagnitudeRatio and logDelayRatio. Groupings were dummycoded such that interactions between the factors listed above clearly illustrate the magniude of differences associated between groups. As noted above, individual slopes varied across factors but not intercepts.
+
+```{r simulationResults, warning=FALSE, message=FALSE, fig.width=9, fig.height=6, eval=TRUE, echo=FALSE}
+
+simulatedComparison <- glmer(Waited ~ Group*logMagRatio + 
+                               Group*log(LLdel + 1) - 1 - Group +
+                               (logMagRatio + log(LLdel + 1) - 1 | Subject), 
+                             data = finalDataFrame, 
+                             family = binomial)
+
+summary(simulatedComparison)
+
+emtrends(simulatedComparison, ~  Group,   
+         var="logMagRatio", 
+         at = list(Group   = c(0,1)))
+
+emtrends(simulatedComparison, ~  Group,   
+         var="LLdel", 
+         at = list(Group   = c(0,1)))
+
+xyplot(fitted(simulatedComparison) ~ logMagRatio, 
+       group = as.factor(Group), 
+       data  = finalDataFrame, 
+       type  = "a", 
+       ylab  = "P(Wait)")
+
+xyplot(fitted(simulatedComparison) ~ LLdel,
+       group = as.factor(Group), 
+       data=finalDataFrame, 
+       type="a", 
+       ylab="P(Wait)")
+
+newdat <- expand.grid(
+  logMagRatio = unique(finalDataFrame$logMagRatio), 
+  LLdel = c(0, unique(finalDataFrame$LLdel)), 
+  Group = c(0, 1), 
+  Waited = 0
+)
+
+modelToPlot<-simulatedComparison 
+
+mm <- model.matrix(terms(modelToPlot),newdat)
+newdat$Waited <- mm %*% fixef(modelToPlot)
+pvar1 <- diag(mm %*% tcrossprod(vcov(modelToPlot),mm))
+newdat <- data.frame(
+  newdat, 
+  ProbWaited = inv.logit(newdat$Waited), 
+  plo = inv.logit(newdat$Waited-sqrt(pvar1)), 
+  phi = inv.logit(newdat$Waited+sqrt(pvar1))
+)
+
+newdat$Group <- ifelse(newdat$Group==1, "Sport", "Protect")
+newdat$LLdel <- as.factor(newdat$LLdel)
+
+newdat$logMagRatio <- exp(newdat$logMagRatio)
+newdat$logMagRatio <- factor(newdat$logMagRatio,
+                             levels = c(1, 2, 4, 8),
+                             labels = c("LLR = SSR", "LLR = 2 x SSR", "LLR = 4 x SSR", "LLR = 8 x SSR"))
+
+g1 <- ggplot(newdat, aes(x = LLdel, 
+                         y = ProbWaited, 
+                         group = Group, 
+                         linetype = Group)) +
+  geom_line() +
+  geom_point() +
+  ylim(0,1)
+
+magnitude.labs <- c("1", "2", "4", "8")
+names(magnitude.labs) <- c("LLR = SSR", "LLR = 2 x SSR", "LLR = 4 x SSR", "LLR = 8 x SSR")
+
+g1 + geom_errorbar(aes(ymin = plo, 
+                       ymax = phi), 
+                   linetype=1, 
+                   width=.02) +
+  xlab("Delay (Weeks)") +
+  ylab("P(Waited)\n") +
+  theme_bw()+
+  theme(text = element_text(size=18),
+        legend.title = element_blank()) +
+  facet_wrap(logMagRatio~.) +
+  theme(legend.position = "bottom")
+```
+
+Here we see that our fixed effects for group closely map to our seed values for Group 1. For Group 2, we calculated each using these fitted values. 
+
+```{r simulationResults2, fig.width=9, fig.height=6, eval=TRUE}
+
+### Group 1 logMagRatio
+fixef(simulatedComparison)["logMagRatio"]
+
+### Group 2 logMagRatio
+fixef(simulatedComparison)["logMagRatio"] + fixef(simulatedComparison)["Group:logMagRatio"]
+
+### Group 1 logDelRatio
+fixef(simulatedComparison)["log(LLdel + 1)"]
+
+### Group 2 logDelRatio
+fixef(simulatedComparison)["log(LLdel + 1)"] + fixef(simulatedComparison)["Group:log(LLdel + 1)"]
+
+```
+
+```{r seeds, fig.align='center', fig.width=6, fig.height=9, eval=FALSE,include=FALSE}
+rownames(priorGroupSeeds) <- c("Group 1", "Group 2")
+
+priorGroupSeeds
+
+require(lattice)
+
+renderParameterK <- function(fittedModel, index) {
+  coef(fittedModel)[index] %>% unname() %>% first() %>% as_tibble() %>%
+    #mutate(k = logDelayRatio / logMagRatio) %>%
+    mutate(k = `log(LLdel + 1)` / logMagRatio) %>%
+    rownames_to_column(var = index) %>%
+    return()
+}
+
+kResults <- renderParameterK(simulatedComparison, index = "Subject") %>%
+  select(Subject, k) %>%
+  rename(lnk = k) %>%
+  mutate(Group = c(rep(0, 50), rep(1, 50)))
+
+subjDelayFrame <- expand.grid(
+  Subject = kResults$Subject,
+  Delays  = c(1, 2, 4, 8, 16)
+)
+
+subjDelayFrame$lnk   <- NA
+subjDelayFrame$Group <- NA
+
+for (i in 1:nrow(kResults)) {
+  subjId <- kResults[i, 'Subject'] %>% pull()
+  subjK  <- kResults[i, 'lnk']     %>% pull()
+  subjG  <- kResults[i, 'Group']   %>% pull()
+  subjDelayFrame[subjDelayFrame$Subject == subjId, "lnk"]   <- subjK
+  subjDelayFrame[subjDelayFrame$Subject == subjId, "Group"] <- subjG
+}
+
+#subjDelayFrame
+
+p1 <- xyplot((1/(1+exp(lnk + 1)*Delays)) ~ Delays | as.factor(Subject),
+       main = "Discounting ...",
+       data = subjDelayFrame,
+       type = c("a"),
+       grid = FALSE,
+       scales=list(x = list(log = TRUE, rot=90)),
+       distribute.type=TRUE)
+
+p1
+
+```
+
+```{r surveyLang, results='asis', echo=FALSE, eval=FALSE}
+
+## Hypothetical Language
+
+library(tidyverse)
+
+indivMatrix = expand.grid(
+  LLdel = c(1, 2, 4, 8, 16),
+  SSdel = rep(0, 5),
+  LLmag = c(1, 2, 4, 8),
+  SSmag = rep(1, length(4))) %>%
+  distinct() %>%
+  mutate(
+    ssr = paste("A) I'd rather keep my firearms unsecured (i.e., 0 time without immediate access), if I had an ", 100-(SSmag/8)*100, "% risk of committing suicide", sep = ""),
+    llr = paste("B) I'd rather temporarily remove firearms from my home (i.e., ", LLdel, " weeks without access while in treatment), if I was told I would have an ", 100-(LLmag/8)*100, "% risk of committing suicide", sep = "")) %>%
+  select(ssr, llr)
+
+for (i in 1:nrow(indivMatrix)) {
+  cat(paste("**Question #", i, "** \r\n\n", 
+            indivMatrix[i, 'ssr'], '\r\n\n', 
+            indivMatrix[i, 'llr'], '\r\n\n',
+            '_________________'), sep = "\r\n\n")
+}
+
+```
